@@ -1,17 +1,29 @@
-import React, { useState, useEffect } from 'react';
-import { Sticker, UserCollection } from './types';
-import { getAllStickers, getTeams } from './data/stickers';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { Sticker } from './types';
+import { getAllStickers } from './data/stickers';
 import { AlbumGrid } from './components/AlbumGrid';
-import { PackOpener } from './components/PackOpener';
-import { TradeMarket } from './components/TradeMarket';
-import { QuestCorner } from './components/QuestCorner';
-import { BookConnector } from './components/BookConnector';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { computeCollectionStats } from './utils/collection';
 import { BookOpen, Package, Globe2, Trophy, Award, Trash2, Shield, RefreshCcw, Sparkles, Smartphone } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+// Code-split/Lazy load secondary tabs (keeps initial load ultra-light)
+const PackOpener = lazy(() => import('./components/PackOpener').then(m => ({ default: m.PackOpener })));
+const TradeMarket = lazy(() => import('./components/TradeMarket').then(m => ({ default: m.TradeMarket })));
+const BookConnector = lazy(() => import('./components/BookConnector').then(m => ({ default: m.BookConnector })));
+const QuestCorner = lazy(() => import('./components/QuestCorner').then(m => ({ default: m.QuestCorner })));
+
+const TabLoadingFallback = () => (
+  <div className="flex flex-col items-center justify-center min-h-[350px] text-slate-500 py-10">
+    <RefreshCcw className="w-8 h-8 animate-spin text-emerald-500 mb-3" />
+    <span className="font-mono text-xs uppercase tracking-widest text-slate-450 animate-pulse">
+      Synchronizing Ledger...
+    </span>
+  </div>
+);
+
 export default function App() {
   const allStickers = getAllStickers();
-  const teams = getTeams();
 
   // --- PERSISTENT STATE LOADING ---
   const [userCopies, setUserCopies] = useState<Record<string, number>>(() => {
@@ -72,87 +84,84 @@ export default function App() {
     localStorage.setItem('panini26_free_pack_cooldown', freePackCooldown.toString());
   }, [freePackCooldown]);
 
-  // --- TIMED COOLDOWN UPDATE EFFECT ---
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTick(t => t + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+  // --- STATS COMPUTING (Optimized single pass) ---
+  const stats = computeCollectionStats(allStickers, userCopies, userGlued);
+  
+  const uniqueStickersOwnedCount = stats.uniqueOwnedCount;
+  const totalStickersGluedCount = stats.gluedCount;
+  const totalShiniesGluedCount = stats.shiniesGlued;
+  const completionPercentage = stats.completionPercentage;
+  const totalDuplicates = stats.duplicatesCount;
 
-  // --- STATS COMPUTING ---
-  const uniqueStickersOwnedCount = Object.keys(userCopies).filter(id => (userCopies[id] || 0) > 0).length;
-  const totalStickersGluedCount = Object.keys(userGlued).filter(id => userGlued[id]).length;
-  const totalShiniesGluedCount = allStickers.filter(s => userGlued[s.id] && s.isShiny).length;
-  const completionPercentage = Math.round((totalStickersGluedCount / allStickers.length) * 100);
-
-  const totalDuplicates = allStickers.reduce((total, s) => {
-    const copies = userCopies[s.id] || 0;
-    const isGlued = userGlued[s.id] || false;
-    const extra = isGlued ? Math.max(0, copies - 1) : Math.max(0, copies);
-    return total + extra;
-  }, 0);
-
-  // --- GAME ACTIONS ---
+  // --- STATE ACTION COOLDOWNS & HANDLERS ---
   
   // Claim Starter Packs (3 packs)
-  const handleClaimStarterPacks = () => {
-    let baseCopies = { ...userCopies };
-    let initialPacksCount = 3;
-    
-    for (let p = 0; p < initialPacksCount; p++) {
-      // Pick 5 random stickers per pack
-      const available = [...allStickers];
-      for (let i = 0; i < 5; i++) {
-        const rIdx = Math.floor(Math.random() * available.length);
-        const card = available[rIdx];
-        baseCopies[card.id] = (baseCopies[card.id] || 0) + 1;
-        available.splice(rIdx, 1);
+  const handleClaimStarterPacks = useCallback(() => {
+    setUserCopies(prev => {
+      const baseCopies = { ...prev };
+      const initialPacksCount = 3;
+      for (let p = 0; p < initialPacksCount; p++) {
+        // Pick 5 random stickers per pack
+        const available = [...allStickers];
+        for (let i = 0; i < 5; i++) {
+          const rIdx = Math.floor(Math.random() * available.length);
+          const card = available[rIdx];
+          baseCopies[card.id] = (baseCopies[card.id] || 0) + 1;
+          available.splice(rIdx, 1);
+        }
       }
-    }
+      return baseCopies;
+    });
 
-    setUserCopies(baseCopies);
-    setPacksOpened(prev => prev + initialPacksCount);
+    setPacksOpened(prev => prev + 3);
     setIsNewUser(false);
-  };
+  }, [allStickers]);
 
   // Glue individual sticker to album
-  const handleGlueSticker = (id: string) => {
-    const ownedCopies = userCopies[id] || 0;
-    if (ownedCopies === 0) return;
-
-    setUserGlued(prev => ({
-      ...prev,
-      [id]: true
-    }));
-  };
+  const handleGlueSticker = useCallback((id: string) => {
+    setUserGlued(prev => {
+      if (prev[id]) return prev; // already glued
+      return {
+        ...prev,
+        [id]: true
+      };
+    });
+  }, []);
 
   // Glue all available owned counters for a team
-  const handleGlueAllTeam = (teamCode: string) => {
-    const teamStickers = allStickers.filter(s => s.teamCode === teamCode);
-    
+  const handleGlueAllTeam = useCallback((teamCode: string) => {
     setUserGlued(prev => {
       const updated = { ...prev };
-      teamStickers.forEach(s => {
-        const owned = userCopies[s.id] || 0;
-        if (owned > 0) {
-          updated[s.id] = true;
+      let changed = false;
+      allStickers.forEach(s => {
+        if (s.teamCode === teamCode) {
+          const owned = userCopies[s.id] || 0;
+          if (owned > 0 && !updated[s.id]) {
+            updated[s.id] = true;
+            changed = true;
+          }
         }
       });
-      return updated;
+      return changed ? updated : prev;
     });
-  };
+  }, [allStickers, userCopies]);
 
   // Spend tokens
-  const handleSpendTokens = (amount: number): boolean => {
-    if (recycleTokens < amount) return false;
-    setRecycleTokens(prev => prev - amount);
-    return true;
-  };
+  const handleSpendTokens = useCallback((amount: number): boolean => {
+    let success = false;
+    setRecycleTokens(prev => {
+      if (prev < amount) {
+        success = false;
+        return prev;
+      }
+      success = true;
+      return prev - amount;
+    });
+    return success;
+  }, []);
 
   // When stickers are drawn from a pack
-  const handleStickersOpened = (stickers: Sticker[]) => {
+  const handleStickersOpened = useCallback((stickers: Sticker[]) => {
     setUserCopies(prev => {
       const updated = { ...prev };
       stickers.forEach(s => {
@@ -161,10 +170,10 @@ export default function App() {
       return updated;
     });
     setPacksOpened(prev => prev + 1);
-  };
+  }, []);
 
   // Execute trade
-  const handleExecuteTrade = (offeredId: string, requestedId: string) => {
+  const handleExecuteTrade = useCallback((offeredId: string, requestedId: string) => {
     setUserCopies(prev => {
       const updated = { ...prev };
       // User loses requestedId (because another collector wanted it)
@@ -177,10 +186,10 @@ export default function App() {
     });
 
     setTradesCompleted(prev => prev + 1);
-  };
+  }, []);
 
   // Recycle duplicates
-  const handleRecycleDuplicates = (amountSpend: number) => {
+  const handleRecycleDuplicates = useCallback((amountSpend: number) => {
     setUserCopies(prev => {
       const updated = { ...prev };
       let reducedCount = 0;
@@ -203,32 +212,36 @@ export default function App() {
     });
 
     setRecycleTokens(prev => prev + 1);
-  };
+  }, [allStickers, userGlued]);
 
   // Buy SPECIFIC player sticker from Token player Bazaar
-  const handleBuyStickerFromBazaar = (stickerId: string, tokenCost: number) => {
-    if (recycleTokens < tokenCost) return;
-    setRecycleTokens(prev => prev - tokenCost);
-    setUserCopies(prev => ({
-      ...prev,
-      [stickerId]: (prev[stickerId] || 0) + 1
-    }));
-  };
+  const handleBuyStickerFromBazaar = useCallback((stickerId: string, tokenCost: number) => {
+    setRecycleTokens(prev => {
+      if (prev < tokenCost) return prev;
+      setUserCopies(cPrev => ({
+        ...cPrev,
+        [stickerId]: (cPrev[stickerId] || 0) + 1
+      }));
+      return prev - tokenCost;
+    });
+  }, []);
 
   // SELL specific duplicate sticker directly for tokens reward
-  const handleSellStickerForTokens = (stickerId: string, tokenReward: number) => {
-    const owned = userCopies[stickerId] || 0;
-    if (owned <= 1) return; // must be a duplicate
+  const handleSellStickerForTokens = useCallback((stickerId: string, tokenReward: number) => {
+    setUserCopies(prev => {
+      const owned = prev[stickerId] || 0;
+      if (owned <= 1) return prev; // must be a duplicate
 
-    setUserCopies(prev => ({
-      ...prev,
-      [stickerId]: owned - 1
-    }));
-    setRecycleTokens(prev => prev + tokenReward);
-  };
+      setRecycleTokens(rPrev => rPrev + tokenReward);
+      return {
+        ...prev,
+        [stickerId]: owned - 1
+      };
+    });
+  }, []);
 
   // Import companion passport code to link, sync state with friends
-  const handleImportState = (decodedJsonStr: string) => {
+  const handleImportState = useCallback((decodedJsonStr: string) => {
     try {
       const parsed = JSON.parse(decodedJsonStr);
       if (parsed.g && parsed.c) {
@@ -258,10 +271,10 @@ export default function App() {
     } catch (err) {
       console.error("Link integration failure", err);
     }
-  };
+  }, []);
 
   // Claim achievement rewards
-  const handleRewardClaim = (packs: number, tokens: number) => {
+  const handleRewardClaim = useCallback((packs: number, tokens: number) => {
     setRecycleTokens(prev => prev + tokens);
     
     // Auto populate random packs
@@ -279,10 +292,10 @@ export default function App() {
       return updated;
     });
     setPacksOpened(prev => prev + packs);
-  };
+  }, [allStickers]);
 
   // Free pack claims
-  const handleFreePackClaim = () => {
+  const handleFreePackClaim = useCallback(() => {
     // Grant pack instantly
     setUserCopies(prev => {
       const updated = { ...prev };
@@ -300,10 +313,10 @@ export default function App() {
     
     // Cooldown is 30 seconds for quick engagement and showcase inside builder
     setFreePackCooldown(Date.now() + 30000);
-  };
+  }, [allStickers]);
 
   // Reset entire collection
-  const handleForceReset = () => {
+  const handleForceReset = useCallback(() => {
     if (confirm("Are you absolutely sure you want to reset your entire digital sticker collection? This will delete all collected stickers, duplicates, and milestones.")) {
       setUserCopies({});
       setUserGlued({});
@@ -315,7 +328,7 @@ export default function App() {
       setActiveTab('album');
       localStorage.removeItem('panini_claimed_achievements');
     }
-  };
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none selection:bg-emerald-500/30 selection:text-emerald-250 print:bg-white print:text-black">
@@ -345,33 +358,33 @@ export default function App() {
           {/* Core Applet Statistics Bar */}
           <div className="flex items-center gap-4 bg-slate-900/50 p-2.5 px-4 rounded-xl border border-slate-850">
             <div className="text-center min-w-[70px]">
-              <span className="font-mono text-xs text-slate-500 block">ALBUM</span>
+              <span className="font-mono text-xs text-slate-550 block">ALBUM</span>
               <p className="font-mono text-sm font-black text-slate-100">
                 {totalStickersGluedCount} / {allStickers.length}
               </p>
             </div>
-            <div className="h-8 w-px bg-slate-800" />
+            <div className="h-8 w-px bg-slate-805" />
             
             <div className="text-center min-w-[50px]">
-              <span className="font-mono text-xs text-slate-500 block">SHINIES</span>
+              <span className="font-mono text-xs text-slate-550 block">SHINIES</span>
               <p className="font-mono text-sm font-black text-yellow-400 flex items-center justify-center gap-0.5">
-                <Sparkles className="w-3 h-3 animate-spin duration-3000" />
+                <Sparkles className="w-3 h-3 animate-spin" style={{ animationDuration: '3s' }} />
                 {totalShiniesGluedCount}
               </p>
             </div>
-            <div className="h-8 w-px bg-slate-800" />
+            <div className="h-8 w-px bg-slate-805" />
 
             <div className="text-center min-w-[45px]">
-              <span className="font-mono text-xs text-slate-500 block">SWAP</span>
-              <p className="font-mono text-sm font-black text-rose-400">
+              <span className="font-mono text-xs text-slate-550 block">SWAP</span>
+              <p className="font-mono text-sm font-black text-rose-450">
                 {totalDuplicates}
               </p>
             </div>
-            <div className="h-8 w-px bg-slate-800" />
+            <div className="h-8 w-px bg-slate-805" />
 
             <div className="text-center min-w-[50px]">
-              <span className="font-mono text-xs text-slate-500 block">TOKENS</span>
-              <p className="font-mono text-sm font-black text-emerald-400">
+              <span className="font-mono text-xs text-slate-550 block">TOKENS</span>
+              <p className="font-mono text-sm font-black text-emerald-450">
                 {recycleTokens}
               </p>
             </div>
@@ -388,7 +401,7 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="max-w-4xl mx-auto px-4 mt-6 w-full print:hidden"
           >
-            <div className="bg-gradient-to-r from-emerald-900/20 via-emerald-950/20 to-lime-950/10 border-2 border-emerald-500/20 p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden shadow-lg">
+            <div className="bg-gradient-to-r from-emerald-990 via-emerald-950 to-lime-950/10 border-2 border-emerald-500/20 p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden shadow-lg">
               <div className="absolute -top-32 -left-32 w-64 h-64 bg-emerald-500/10 blur-3xl rounded-full" />
               
               <div className="z-10 text-center md:text-left">
@@ -409,7 +422,7 @@ export default function App() {
               <button
                 id="claim-starter-packs-btn"
                 onClick={handleClaimStarterPacks}
-                className="z-10 w-full md:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-500 hover:scale-[1.02] text-white font-sans text-sm font-bold rounded-xl shadow-lg border border-emerald-400 cursor-pointer transition-all shrink-0"
+                className="z-10 w-full md:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-500 hover:scale-[1.02] text-white font-sans text-sm font-bold rounded-xl shadow-lg border border-emerald-400 cursor-pointer transition-all shrink-0 font-bold"
               >
                 Claim 3 Starter Packs
               </button>
@@ -427,7 +440,7 @@ export default function App() {
               <span className="font-sans text-xs font-bold text-slate-400 uppercase tracking-widest">
                 Overall Book Completion
               </span>
-              <span className="font-mono text-sm font-black text-emerald-400 font-extrabold">{completionPercentage}%</span>
+              <span className="font-mono text-sm font-black text-emerald-450 font-extrabold">{completionPercentage}%</span>
             </div>
             <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-850">
               <div 
@@ -474,11 +487,13 @@ export default function App() {
       </div>
 
       {/* TAB NAVIGATION PANEL */}
-      <nav id="app-navigation-bar" className="max-w-7xl mx-auto px-4 mt-6 w-full flex border-b border-slate-900 print:hidden">
+      <nav id="app-navigation-bar" className="max-w-7xl mx-auto px-4 mt-6 w-full flex border-b border-slate-900 print:hidden" role="tablist">
         <div className="flex gap-1 overflow-x-auto select-none no-scrollbar pb-px">
           {/* TAB 1: Visual Album Book */}
           <button
             id="tab-album-btn"
+            role="tab"
+            aria-selected={activeTab === 'album'}
             onClick={() => setActiveTab('album')}
             className={`flex items-center gap-2 px-5 py-3 font-sans text-sm font-bold border-b-2 cursor-pointer transition-all shrink-0 ${
               activeTab === 'album'
@@ -493,6 +508,8 @@ export default function App() {
           {/* TAB 2: Foil Wrapper Opener */}
           <button
             id="tab-booster-btn"
+            role="tab"
+            aria-selected={activeTab === 'booster'}
             onClick={() => setActiveTab('booster')}
             className={`flex items-center gap-2 px-5 py-3 font-sans text-sm font-bold border-b-2 cursor-pointer transition-all shrink-0 ${
               activeTab === 'booster'
@@ -507,6 +524,8 @@ export default function App() {
           {/* TAB 3: Global Swap Traders */}
           <button
             id="tab-traders-btn"
+            role="tab"
+            aria-selected={activeTab === 'traders'}
             onClick={() => setActiveTab('traders')}
             className={`flex items-center gap-2 px-5 py-3 font-sans text-sm font-bold border-b-2 cursor-pointer transition-all shrink-0 ${
               activeTab === 'traders'
@@ -521,6 +540,8 @@ export default function App() {
           {/* TAB 4: Companion Sync Code */}
           <button
             id="tab-companion-btn"
+            role="tab"
+            aria-selected={activeTab === 'companion'}
             onClick={() => setActiveTab('companion')}
             className={`flex items-center gap-2 px-5 py-3 font-sans text-sm font-bold border-b-2 cursor-pointer transition-all shrink-0 ${
               activeTab === 'companion'
@@ -535,6 +556,8 @@ export default function App() {
           {/* TAB 5: Quests Corner */}
           <button
             id="tab-quests-btn"
+            role="tab"
+            aria-selected={activeTab === 'quests'}
             onClick={() => setActiveTab('quests')}
             className={`flex items-center gap-2 px-5 py-3 font-sans text-sm font-bold border-b-2 cursor-pointer transition-all shrink-0 ${
               activeTab === 'quests'
@@ -550,97 +573,107 @@ export default function App() {
 
       {/* DYNAMIC VIEW CONTAINER */}
       <main className="flex-grow py-4 print:py-0">
-        <AnimatePresence mode="wait">
-          {activeTab === 'album' && (
-            <motion.div
-              key="view-album"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <AlbumGrid
-                userCopies={userCopies}
-                userGlued={userGlued}
-                onGlueSticker={handleGlueSticker}
-                onGlueAllTeam={handleGlueAllTeam}
-              />
-            </motion.div>
-          )}
+        <ErrorBoundary>
+          <AnimatePresence mode="wait">
+            {activeTab === 'album' && (
+              <motion.div
+                key="view-album"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <AlbumGrid
+                  userCopies={userCopies}
+                  userGlued={userGlued}
+                  onGlueSticker={handleGlueSticker}
+                  onGlueAllTeam={handleGlueAllTeam}
+                />
+              </motion.div>
+            )}
 
-          {activeTab === 'booster' && (
-            <motion.div
-              key="view-booster"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <PackOpener
-                onStickersOpened={handleStickersOpened}
-                recycleTokens={recycleTokens}
-                onSpendTokens={handleSpendTokens}
-               />
-            </motion.div>
-          )}
+            {activeTab === 'booster' && (
+              <motion.div
+                key="view-booster"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <Suspense fallback={<TabLoadingFallback />}>
+                  <PackOpener
+                    onStickersOpened={handleStickersOpened}
+                    recycleTokens={recycleTokens}
+                    onSpendTokens={handleSpendTokens}
+                  />
+                </Suspense>
+              </motion.div>
+            )}
 
-          {activeTab === 'traders' && (
-            <motion.div
-              key="view-traders"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <TradeMarket
-                userCopies={userCopies}
-                userGlued={userGlued}
-                onExecuteTrade={handleExecuteTrade}
-                recycleTokens={recycleTokens}
-                onBuyStickerFromBazaar={handleBuyStickerFromBazaar}
-                onSellStickerForTokens={handleSellStickerForTokens}
-              />
-            </motion.div>
-          )}
+            {activeTab === 'traders' && (
+              <motion.div
+                key="view-traders"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <Suspense fallback={<TabLoadingFallback />}>
+                  <TradeMarket
+                    userCopies={userCopies}
+                    userGlued={userGlued}
+                    onExecuteTrade={handleExecuteTrade}
+                    recycleTokens={recycleTokens}
+                    onBuyStickerFromBazaar={handleBuyStickerFromBazaar}
+                    onSellStickerForTokens={handleSellStickerForTokens}
+                  />
+                </Suspense>
+              </motion.div>
+            )}
 
-          {activeTab === 'companion' && (
-            <motion.div
-              key="view-companion"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <BookConnector
-                userCopies={userCopies}
-                userGlued={userGlued}
-                recycleTokens={recycleTokens}
-                onImportState={handleImportState}
-              />
-            </motion.div>
-          )}
+            {activeTab === 'companion' && (
+              <motion.div
+                key="view-companion"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <Suspense fallback={<TabLoadingFallback />}>
+                  <BookConnector
+                    userCopies={userCopies}
+                    userGlued={userGlued}
+                    recycleTokens={recycleTokens}
+                    onImportState={handleImportState}
+                  />
+                </Suspense>
+              </motion.div>
+            )}
 
-          {activeTab === 'quests' && (
-            <motion.div
-              key="view-quests"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <QuestCorner
-                questStats={{
-                  packsOpened,
-                  stickersGlued: totalStickersGluedCount,
-                  shiniesGlued: totalShiniesGluedCount,
-                  tradesCompleted
-                }}
-                recycleTokens={recycleTokens}
-                userCopies={userCopies}
-                userGlued={userGlued}
-                onRecycleDuplicates={handleRecycleDuplicates}
-                onRewardClaim={handleRewardClaim}
-                onFreePackClaim={handleFreePackClaim}
-                freePackCooldown={freePackCooldown}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+            {activeTab === 'quests' && (
+              <motion.div
+                key="view-quests"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <Suspense fallback={<TabLoadingFallback />}>
+                  <QuestCorner
+                    questStats={{
+                      packsOpened,
+                      stickersGlued: totalStickersGluedCount,
+                      shiniesGlued: totalShiniesGluedCount,
+                      tradesCompleted
+                    }}
+                    recycleTokens={recycleTokens}
+                    userCopies={userCopies}
+                    userGlued={userGlued}
+                    onRecycleDuplicates={handleRecycleDuplicates}
+                    onRewardClaim={handleRewardClaim}
+                    onFreePackClaim={handleFreePackClaim}
+                    freePackCooldown={freePackCooldown}
+                  />
+                </Suspense>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </ErrorBoundary>
       </main>
 
       {/* CORE FOOTER BRAND & RESET CONTROLS */}
@@ -653,7 +686,7 @@ export default function App() {
           <button
             id="wipe-collection-btn"
             onClick={handleForceReset}
-            className="px-3.5 py-1.5 hover:bg-rose-950/25 border border-transparent hover:border-rose-900/40 rounded-lg text-rose-500 hover:text-rose-450 transition-all cursor-pointer font-sans text-xs flex items-center gap-1.5"
+            className="px-3.5 py-1.5 hover:bg-rose-955 border border-transparent hover:border-rose-900/40 rounded-lg text-rose-500 hover:text-rose-450 transition-all cursor-pointer font-sans text-xs flex items-center gap-1.5 font-bold"
           >
             <Trash2 className="w-3.5 h-3.5" />
             Delete All Progress

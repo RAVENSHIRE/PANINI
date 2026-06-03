@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+/*
+ * Custom palette shades used throughout the app (e.g. slate-850, slate-205).
+ * These are NOT part of Tailwind's default scale, so without these declarations
+ * every `*-850 / *-205 / *-450` class silently emitted no CSS. Defining them here
+ * repairs 100+ borders/text colors across all components in one place.
+ */
+@theme {
+  --color-slate-150: #eaeff5;
+  --color-slate-205: #dde3ec;
+  --color-slate-250: #d3dbe6;
+  --color-slate-350: #b6c0cf;
+  --color-slate-450: #7c8aa3;
+  --color-slate-550: #5b6878;
+  --color-slate-650: #3d4757;
+  --color-slate-850: #172033;
+
+  --color-emerald-250: #8bedc4;
+  --color-emerald-450: #1fc88c;
+  --color-emerald-850: #065741;
+
+  --color-yellow-150: #fef4a6;
+  --color-yellow-250: #fdee69;
+  --color-yellow-550: #daa106;
+
+  --color-amber-450: #f8af18;
+  --color-amber-650: #c66508;
+
+  --color-rose-350: #fc8a9a;
+  --color-rose-450: #f85872;
+  --color-rose-550: #ea2e53;
+}
+
+/* Hide scrollbars on horizontally-scrollable tab/team rows (class was used but never defined). */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Respect users who prefer reduced motion: neutralize the decorative loops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

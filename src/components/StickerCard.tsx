@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { Sticker } from '../types';
 import { Star, Shield, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { TEAM_FLAGS } from '../data/stickers';
 
 interface StickerCardProps {
   sticker: Sticker;
@@ -13,7 +14,7 @@ interface StickerCardProps {
   onGlue?: () => void;
 }
 
-export const StickerCard: React.FC<StickerCardProps> = ({
+export const StickerCard = memo<StickerCardProps>(({
   sticker,
   isGlued = true,
   duplicateCount = 0,
@@ -36,6 +37,25 @@ export const StickerCard: React.FC<StickerCardProps> = ({
   const getCardStyle = () => {
     if (!isGlued) {
       return 'border-2 border-dashed border-emerald-800/40 bg-emerald-950/10 text-emerald-800/40';
+    }
+
+    // Special Foils (Premium Material)
+    if (sticker.teamCode === 'SPC') {
+      return 'bg-gradient-to-br from-indigo-200 via-purple-350 to-pink-300 text-indigo-950 border-2 border-purple-200 shadow-[0_0_15px_rgba(168,85,247,0.45)] duration-300 font-bold';
+    }
+
+    // Ultra-Rare Extras (4 variations)
+    if (sticker.name.includes('[Gold]')) {
+      return 'bg-gradient-to-br from-yellow-300 via-amber-450 to-yellow-600 text-amber-950 border-2 border-yellow-250 shadow-[0_0_20px_rgba(245,158,11,0.6)] duration-300 font-extrabold';
+    }
+    if (sticker.name.includes('[Silver]')) {
+      return 'bg-gradient-to-br from-slate-200 via-zinc-100 to-slate-400 text-slate-950 border-2 border-slate-100 shadow-[0_0_15px_rgba(148,163,184,0.45)] duration-300 font-bold';
+    }
+    if (sticker.name.includes('[Bronze]')) {
+      return 'bg-gradient-to-br from-amber-700 via-amber-555 to-orange-850 text-yellow-50 border-2 border-amber-600/70 shadow-[0_0_12px_rgba(217,119,6,0.4)] duration-300 font-bold';
+    }
+    if (sticker.name.includes('[Base]')) {
+      return 'bg-gradient-to-br from-teal-50 via-cyan-150 to-teal-150 text-teal-950 border-2 border-teal-200 shadow-[0_0_10px_rgba(20,184,166,0.3)] duration-300 font-bold';
     }
     
     if (sticker.isShiny) {
@@ -153,26 +173,16 @@ export const StickerCard: React.FC<StickerCardProps> = ({
             <Shield className={`w-1/2 h-1/2 ${sticker.isShiny ? 'text-yellow-100' : 'text-indigo-950'}`} />
           ) : (
             <div className="flex flex-col items-center justify-center">
-              <span className={`font-black text-center leading-none ${size === 'lg' ? 'text-2xl' : 'text-sm'} ${sticker.isShiny ? 'text-yellow-150 text-white' : 'text-slate-900'}`}>
-                {sticker.name.split(' ').map(n => n[0]).join('')}
+              <span className={`font-black text-center leading-none ${size === 'lg' ? 'text-2xl' : 'text-sm'} ${sticker.isShiny ? 'text-white' : 'text-slate-900'}`}>
+                {sticker.name.replace(/\[.*?\]/g, '').trim().split(' ').filter(Boolean).map(n => n[0]).join('')}
               </span>
             </div>
           )}
 
           {/* Micro flag layer inside slot */}
           {sticker.position !== 'Badge' && (
-            <div className="absolute -bottom-1 -right-1 bg-white text-xs px-1 rounded shadow-sm leading-none flex items-center">
-              {sticker.teamName === 'United States' ? '🇺🇸' : 
-               sticker.teamName === 'Mexico' ? '🇲🇽' :
-               sticker.teamName === 'Canada' ? '🇨🇦' :
-               sticker.teamName === 'Argentina' ? '🇦🇷' :
-               sticker.teamName === 'Brazil' ? '🇧🇷' :
-               sticker.teamName === 'France' ? '🇫🇷' :
-               sticker.teamName === 'England' ? '🏴󠁧󠁢󠁥󠁮󠁧󠁿' :
-               sticker.teamName === 'Spain' ? '🇪🇸' :
-               sticker.teamName === 'Germany' ? '🇩🇪' :
-               sticker.teamName === 'Italy' ? '🇮🇹' :
-               sticker.teamName === 'Japan' ? '🇯🇵' : '🇲🇦'}
+            <div className="absolute -bottom-1 -right-1 bg-white text-xs px-1 rounded shadow-sm leading-none flex items-center shadow-xs">
+              {TEAM_FLAGS[sticker.teamCode] || '🏳️'}
             </div>
           )}
         </div>
@@ -219,4 +229,6 @@ export const StickerCard: React.FC<StickerCardProps> = ({
       )}
     </div>
   );
-};
+});
+
+StickerCard.displayName = 'StickerCard';

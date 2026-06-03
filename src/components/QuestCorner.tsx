@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DailyQuest, Sticker } from '../types';
 import { getAllStickers } from '../data/stickers';
 import { Trophy, HelpCircle, Gift, Sparkles, CheckCircle, RefreshCw, Star } from 'lucide-react';
@@ -126,8 +126,27 @@ export const QuestCorner: React.FC<QuestCornerProps> = ({
   };
 
   // Free pack claims countdown rendering
-  const now = Date.now();
-  const secondsLeft = Math.max(0, Math.floor((freePackCooldown - now) / 1000));
+  const [secondsLeft, setSecondsLeft] = useState(() => Math.max(0, Math.floor((freePackCooldown - Date.now()) / 1000)));
+
+  useEffect(() => {
+    const initialSeconds = Math.max(0, Math.floor((freePackCooldown - Date.now()) / 1000));
+    setSecondsLeft(initialSeconds);
+    
+    if (initialSeconds <= 0) return;
+
+    const interval = setInterval(() => {
+      setSecondsLeft(() => {
+        const next = Math.max(0, Math.floor((freePackCooldown - Date.now()) / 1000));
+         if (next <= 0) {
+           clearInterval(interval);
+         }
+         return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [freePackCooldown]);
+
   const canClaimFree = secondsLeft <= 0;
 
   const formatCooldown = (seconds: number) => {
