@@ -1,0 +1,6 @@
+{
+  "name": "Panini World Cup 2026 Digital Sticker Collection",
+  "description": "An interactive digital sticker album for the FIFA World Cup 2026. Open booster packs with physical peeling animations, glue stickers into your visual album, manage duplicates, and trade in a simulated global market.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
